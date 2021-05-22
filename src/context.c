@@ -40,7 +40,6 @@
 #include <linux/videodev2.h>
 
 #include <mpeg2-ctrls.h>
-#include <h264-ctrls.h>
 #include <hevc-ctrls.h>
 
 #include "utils.h"
@@ -104,7 +103,9 @@ VAStatus RequestCreateContext(VADriverContextP context, VAConfigID config_id,
 	case VAProfileH264ConstrainedBaseline:
 	case VAProfileH264MultiviewHigh:
 	case VAProfileH264StereoHigh:
-		pixelformat = V4L2_PIX_FMT_H264_SLICE_RAW;
+		pixelformat = V4L2_PIX_FMT_H264_SLICE;
+		/* Query decode mode and start code */
+		h264_get_controls(driver_data, context_object);
 		break;
 
 	case VAProfileHEVCMain:
@@ -116,6 +117,30 @@ VAStatus RequestCreateContext(VADriverContextP context, VAConfigID config_id,
 		goto error;
 	}
 
+	rc = v4l2_set_stream(driver_data->video_fd, output_type, false);
+	if (rc < 0) {
+		status = VA_STATUS_ERROR_OPERATION_FAILED;
+		goto error;
+	}
+
+	rc = v4l2_set_stream(driver_data->video_fd, capture_type, false);
+	if (rc < 0) {
+		status = VA_STATUS_ERROR_OPERATION_FAILED;
+		goto error;
+	}
+
+	rc = v4l2_request_buffers(driver_data->video_fd, capture_type, 0);
+	if (rc < 0) {
+		status = VA_STATUS_ERROR_OPERATION_FAILED;
+		goto error;
+	}
+
+	rc = v4l2_request_buffers(driver_data->video_fd, output_type, 0);
+	if (rc < 0) {
+		status = VA_STATUS_ERROR_OPERATION_FAILED;
+		goto error;
+	}
+
 	rc = v4l2_set_format(driver_data->video_fd, output_type, pixelformat,
 			     picture_width, picture_height);
 	if (rc < 0) {
@@ -124,6 +149,13 @@ VAStatus RequestCreateContext(VADriverContextP context, VAConfigID config_id,
 	}
 
 	rc = v4l2_create_buffers(driver_data->video_fd, output_type,
+				 surfaces_count, &index_base);
+	if (rc < 0) {
+		status = VA_STATUS_ERROR_ALLOCATION_FAILED;
+		goto error;
+	}
+
+	rc = v4l2_create_buffers(driver_data->video_fd, capture_type,
 				 surfaces_count, &index_base);
 	if (rc < 0) {
 		status = VA_STATUS_ERROR_ALLOCATION_FAILED;
@@ -192,6 +224,8 @@ VAStatus RequestCreateContext(VADriverContextP context, VAConfigID config_id,
 	context_object->flags = flags;
 
 	*context_id = id;
+
+	request_log("Enabling hardware acceleration using VA-API ....\n");
 
 	status = VA_STATUS_SUCCESS;
 	goto complete;
